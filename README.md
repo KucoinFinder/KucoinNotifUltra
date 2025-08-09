@@ -15,6 +15,7 @@ A production‑oriented Node.js scanner that hunts for **coins about to pump** o
 
 - **Output:** one consolidated email with **winners** (must-pass) plus a table of **near‑misses** with high **score** (>= `SCORE_ALERT_MIN`). High‑scoring symbols (`score ≥ ALT_SCORE_PASS_MIN`, default 4.0) are also treated as winners.
 
+
 ---
 
 ## Contents
@@ -35,8 +36,8 @@ A production‑oriented Node.js scanner that hunts for **coins about to pump** o
 ## Architecture
 
 **Files**
-```
-KucoinCoinFinderMaster.js   # Main executable
+
+KucoinCoinFinderUltra.js   # Main executable
 .env                        # Environment variables (thresholds, email, schedule)
 ```
 
@@ -151,6 +152,7 @@ All klines returned by `/kline/query` are parsed as:
 
 #### F. Funding Rate Bias — `signalFundingRateBias(rate)`
 - Uses `fundingFeeRate` from the active contract snapshot (no extra request).
+
 - Pass if absolute funding rate ≥ `FUNDING_RATE_THRESHOLD`.
 
 **Why it matters:** Elevated funding often precedes aggressive long pressure and can hint at imminent markup.
@@ -292,7 +294,10 @@ EMAIL_FROM=you@gmail.com
 EMAIL_PASS=your_gmail_app_password
 EMAIL_TO=alerts@yourdomain.com
 EMAIL_DRY_RUN=false   # true → print email to console only
+WEBHOOK_URL=          # optional webhook for alerts
 ```
+
+`WEBHOOK_URL` posts alert payloads to a custom endpoint alongside email.
 
 **Debug**
 ```
@@ -328,8 +333,11 @@ npm i axios dayjs nodemailer node-cron p-limit dotenv
 
 **Run once**
 ```bash
-node KucoinCoinFinderMaster.js
+node KucoinCoinFinderUltra.js   # main entry
+# legacy: node KucoinCoinFinderMaster.js
 ```
+
+The Ultra script supersedes the legacy Master entry point but both are retained for reference.
 
 **Scheduled run**
 - Enabled by default: `SCHEDULE_ENABLED=true`, at 5 PM local (`DAILY_SCAN_CRON=0 17 * * *`)
@@ -387,6 +395,7 @@ node KucoinCoinFinderMaster.js
 - `fetch15mCandles(symbol)` — Aligned 15m klines (logging & sanity)
 - `fetch1mCandles(symbol)` — Last `M1_LOOKBACK_MIN` 1m klines in window
 - `fetchDailyCandle(symbol)` — Aligned 1D kline (for daily pump filter)
+- `fetchFundingRate(symbol)` — Latest funding rate for symbol
 - `fetchHistoricalDailyVolumes(symbol)` — ~800 days in chunked requests
 - `fetchCurrentAlignedDayVolume(symbol)` — Today’s aligned 1D volume
 - `runSmartScan()` — Batching, evaluation, email, summary

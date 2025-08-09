@@ -111,6 +111,9 @@ const CFG = {
   EMAIL_TO: process.env.EMAIL_TO || '',
   EMAIL_DRY_RUN: envBool(process.env.EMAIL_DRY_RUN, false), // log instead of send
 
+  // Optional webhook notifications
+  WEBHOOK_URL: process.env.WEBHOOK_URL || '',
+
   // Scheduling
   DAILY_SCAN_CRON: process.env.DAILY_SCAN_CRON || '0 17 * * *', // 5pm local
   SCHEDULE_ENABLED: envBool(process.env.SCHEDULE_ENABLED, true),
@@ -315,6 +318,14 @@ async function fetch1mCandles(symbol) {
   const winStr = `${startLocal.format('YYYY-MM-DD HH:mm z')} → ${endLocal.format('YYYY-MM-DD HH:mm z')}`;
   if (!arr || arr.length === 0) log.debug(`⚠️ ${symbol}: empty 1m for ${winStr}`);
   return Array.isArray(arr) ? arr.slice(-CFG.M1_LOOKBACK_MIN) : [];
+}
+
+async function fetchFundingRate(symbol) {
+  const fetchFn = async () => {
+    const res = await api.get(`/funding-rate?symbol=${encodeURIComponent(symbol)}`, { _label: `GET funding-rate ${symbol}` });
+    return res.data?.data || null;
+  };
+  return retryOnRateLimit(fetchFn, `funding rate ${symbol}`);
 }
 
 function signalFundingRateBias(rate) {
@@ -632,6 +643,7 @@ async function evaluateSymbol(symbol, fundingRate) {
   const sqzSig = signalSqueezeBreakout(klines);
   const m1Sig = await signalOneMinuteWhaleSweeps(symbol);
   const frSig = signalFundingRateBias(fundingRate);
+
   // scoring for near-miss surfacing
   let score = 0;
   if (volSig?.pass) score += CFG.W_VOL_SPIKE;
