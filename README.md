@@ -6,14 +6,14 @@ A production‑oriented Node.js scanner that hunts for **coins about to pump** o
 
 ## TL;DR
 
-- **Gating (must-pass):**
-  1) Today’s aligned **1D volume** ≥ `VOLUME_SPIKE_RATIO` × **historical daily max**  
+- **Gating (must-pass):** pass if either condition below is true (set `REQUIRE_BOTH_GATES=true` to demand both)
+  1) Today’s aligned **1D volume** ≥ `VOLUME_SPIKE_RATIO` × **historical daily max**
   2) At least one **15m intrabar jump** > `PRICE_JUMP_RATIO` (High–Low vs Low)
 
-- **Confluence (non-gating, score-based):**  
-  Turnover spike, OBV impulse, Squeeze→Breakout, 1m whale sweeps
+- **Confluence (non-gating, score-based):**
+  Turnover spike, OBV impulse, Squeeze→Breakout, 1m whale sweeps, funding rate bias
 
-- **Output:** one consolidated email with **winners** (must-pass) plus a table of **near‑misses** with high **score** (>= `SCORE_ALERT_MIN`)
+- **Output:** one consolidated email with **winners** (must-pass) plus a table of **near‑misses** with high **score** (>= `SCORE_ALERT_MIN`). High‑scoring symbols (`score ≥ ALT_SCORE_PASS_MIN`, default 4.0) are also treated as winners.
 
 ---
 
@@ -99,7 +99,7 @@ All klines returned by `/kline/query` are parsed as:
   \]
 - Pass if any \( R_c > \texttt{PRICE\_JUMP\_RATIO} \).
 
-> The final **must-pass** condition requires **both** A and B to be true.
+> By default the **must-pass** condition succeeds if **either** A or B is true. Set `REQUIRE_BOTH_GATES=true` to force both.
 
 ---
 
@@ -149,7 +149,13 @@ All klines returned by `/kline/query` are parsed as:
 
 **Why it matters:** Coiling ranges precede expansions; volume + close near high support break direction.
 
-#### F. 1m Whale Sweeps — `signalOneMinuteWhaleSweeps(symbol)`
+#### F. Funding Rate Bias — `signalFundingRateBias(symbol)`
+- Fetch latest funding rate via `/funding-rate?symbol=...`.
+- Pass if absolute funding rate ≥ `FUNDING_RATE_THRESHOLD`.
+
+**Why it matters:** Elevated funding often precedes aggressive long pressure and can hint at imminent markup.
+
+#### G. 1m Whale Sweeps — `signalOneMinuteWhaleSweeps(symbol)`
 - Fetch last `M1_LOOKBACK_MIN` **1m** candles within the aligned day.
 - Mark an **extreme minute** if:
   - volume Z‑score ≥ `M1_VOL_Z_MIN`
@@ -164,7 +170,7 @@ All klines returned by `/kline/query` are parsed as:
 
 Let the indicator weights be:
 ```
-W_VOL_SPIKE, W_15M_JUMP, W_TURNOVER, W_OBV, W_SQUEEZE, W_M1_WHALE
+W_VOL_SPIKE, W_15M_JUMP, W_TURNOVER, W_OBV, W_SQUEEZE, W_M1_WHALE, W_FUNDING_RATE
 ```
 
 \[
@@ -173,6 +179,7 @@ W_VOL_SPIKE, W_15M_JUMP, W_TURNOVER, W_OBV, W_SQUEEZE, W_M1_WHALE
 
 - **Winners:** `mustPass === true`
 - **Near‑misses (high confluence):** `score ≥ SCORE_ALERT_MIN` (listed in a second email table)
+- **Alt pass:** if `ALT_SCORE_PASS_MIN` is set, any symbol with `score ≥ ALT_SCORE_PASS_MIN` is also considered a winner.
 
 ---
 
@@ -227,6 +234,7 @@ ENABLE_VOLUME_SPIKE=true
 VOLUME_SPIKE_RATIO=1.10
 PRICE_JUMP_RATIO=0.10             # 10% intrabar jump on 15m
 GRANULARITY_MIN=15
+REQUIRE_BOTH_GATES=false          # true → demand both volume spike and price jump
 ```
 
 **Confluence (non-gating)**
@@ -250,6 +258,9 @@ M1_LOOKBACK_MIN=60
 M1_VOL_Z_MIN=2.00
 M1_CLOSE_NEAR_HIGH_PCT=0.25
 M1_MIN_SWEEPS=1
+
+ENABLE_FUNDING_RATE_BIAS=true
+FUNDING_RATE_THRESHOLD=0.0005
 ```
 
 **Scoring**
@@ -260,7 +271,9 @@ W_TURNOVER=1.2
 W_OBV=1.0
 W_SQUEEZE=1.0
 W_M1_WHALE=1.3
+W_FUNDING_RATE=0.8
 SCORE_ALERT_MIN=2.6
+ALT_SCORE_PASS_MIN=4.0      # score ≥ this also counts as winner (raise to disable)
 ```
 
 **Batch / Network**
@@ -374,6 +387,7 @@ node KucoinCoinFinderMaster.js
 - `fetch15mCandles(symbol)` — Aligned 15m klines (logging & sanity)
 - `fetch1mCandles(symbol)` — Last `M1_LOOKBACK_MIN` 1m klines in window
 - `fetchDailyCandle(symbol)` — Aligned 1D kline (for daily pump filter)
+- `fetchFundingRate(symbol)` — Latest funding rate for symbol
 - `fetchHistoricalDailyVolumes(symbol)` — ~800 days in chunked requests
 - `fetchCurrentAlignedDayVolume(symbol)` — Today’s aligned 1D volume
 - `runSmartScan()` — Batching, evaluation, email, summary
@@ -390,6 +404,7 @@ node KucoinCoinFinderMaster.js
 - `signalTurnoverSpike(klines15m)` — Turnover Z + T/V expansion
 - `signalOBVImpulse(klines15m)` — OBV Z‑score thrust
 - `signalSqueezeBreakout(klines15m)` — BB‑in‑KC squeeze → breakout
+- `signalFundingRateBias(symbol)` — Elevated funding rate
 - `signalOneMinuteWhaleSweeps(symbol)` — Extreme 1m bursts near highs
 
 ### Math & utils
