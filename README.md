@@ -13,7 +13,7 @@ A production‑oriented Node.js scanner that hunts for **coins about to pump** o
 - **Confluence (non-gating, score-based):**
   Turnover spike, OBV impulse, Squeeze→Breakout, 1m whale sweeps, funding rate bias
 
-- **Output:** one consolidated email with **winners** (must-pass) plus a table of **near‑misses** with high **score** (>= `SCORE_ALERT_MIN`). High‑scoring symbols (`score ≥ ALT_SCORE_PASS_MIN`, default 4.0) are also treated as winners.
+- **Output:** one consolidated email (and optional webhook) with **winners** (must-pass) plus a table of **near‑misses** with high **score** (>= `SCORE_ALERT_MIN`). High‑scoring symbols (`score ≥ ALT_SCORE_PASS_MIN`, default 4.0) are also treated as winners.
 
 ---
 
@@ -35,7 +35,7 @@ A production‑oriented Node.js scanner that hunts for **coins about to pump** o
 ## Architecture
 
 **Files**
-```
+
 KucoinCoinFinderUltra.js   # Main executable
 .env                        # Environment variables (thresholds, email, schedule)
 ```
@@ -292,7 +292,10 @@ EMAIL_FROM=you@gmail.com
 EMAIL_PASS=your_gmail_app_password
 EMAIL_TO=alerts@yourdomain.com
 EMAIL_DRY_RUN=false   # true → print email to console only
+WEBHOOK_URL=          # optional webhook for alerts
 ```
+
+`WEBHOOK_URL` posts alert payloads to a custom endpoint alongside email.
 
 **Debug**
 ```
@@ -328,8 +331,11 @@ npm i axios dayjs nodemailer node-cron p-limit dotenv
 
 **Run once**
 ```bash
-node KucoinCoinFinderMaster.js
+node KucoinCoinFinderUltra.js   # main entry
+# legacy: node KucoinCoinFinderMaster.js
 ```
+
+The Ultra script supersedes the legacy Master entry point but both are retained for reference.
 
 **Scheduled run**
 - Enabled by default: `SCHEDULE_ENABLED=true`, at 5 PM local (`DAILY_SCAN_CRON=0 17 * * *`)
