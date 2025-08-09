@@ -111,6 +111,9 @@ const CFG = {
   EMAIL_TO: process.env.EMAIL_TO || '',
   EMAIL_DRY_RUN: envBool(process.env.EMAIL_DRY_RUN, false), // log instead of send
 
+  // Optional webhook notifications
+  WEBHOOK_URL: process.env.WEBHOOK_URL || '',
+
   // Scheduling
   DAILY_SCAN_CRON: process.env.DAILY_SCAN_CRON || '0 17 * * *', // 5pm local
   SCHEDULE_ENABLED: envBool(process.env.SCHEDULE_ENABLED, true),
