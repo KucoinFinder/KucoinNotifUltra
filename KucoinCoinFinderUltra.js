@@ -278,7 +278,11 @@ async function fetchSymbols() {
   const fetchFn = async () => {
     const res = await api.get('/contracts/active', { _label: 'GET /contracts/active' });
     const list = res.data.data
-      .map(c => ({ fullSymbol: c.symbol, baseSymbol: `K${c.baseCurrency}` }))
+      .map(c => ({
+        fullSymbol: c.symbol,
+        baseSymbol: `K${c.baseCurrency}`,
+        fundingRate: Number(c.fundingFeeRate)
+      }))
       .sort((a, b) => a.fullSymbol.localeCompare(b.fullSymbol));
     return list;
   };
@@ -324,11 +328,8 @@ async function fetchFundingRate(symbol) {
   return retryOnRateLimit(fetchFn, `funding rate ${symbol}`);
 }
 
-async function signalFundingRateBias(symbol) {
+function signalFundingRateBias(rate) {
   if (!CFG.ENABLE_FUNDING_RATE_BIAS) return null;
-  const fr = await fetchFundingRate(symbol);
-  if (!fr) return null;
-  const rate = Number(fr.fundingRate ?? fr.value ?? fr.rate);
   if (!isFinite(rate)) return null;
   const pass = Math.abs(rate) >= CFG.FUNDING_RATE_THRESHOLD;
   return { pass, rate };
@@ -613,7 +614,7 @@ async function signalOneMinuteWhaleSweeps(symbol) {
 ////////////////////////////////////////////////////////////////////////////////
 // Per-symbol evaluation
 ////////////////////////////////////////////////////////////////////////////////
-async function evaluateSymbol(symbol) {
+async function evaluateSymbol(symbol, fundingRate) {
   // 1) Daily pump gate
   const daily = await fetchDailyCandle(symbol);
   if (!passesDailyPumpFilter(daily)) return null;
@@ -641,7 +642,8 @@ async function evaluateSymbol(symbol) {
   const obvSig = signalOBVImpulse(klines);
   const sqzSig = signalSqueezeBreakout(klines);
   const m1Sig = await signalOneMinuteWhaleSweeps(symbol);
-  const frSig = await signalFundingRateBias(symbol);
+  const frSig = signalFundingRateBias(fundingRate);
+
   // scoring for near-miss surfacing
   let score = 0;
   if (volSig?.pass) score += CFG.W_VOL_SPIKE;
@@ -825,7 +827,7 @@ async function runSmartScan() {
 
   for (let i = 0; i < symbols.length; i += CFG.BATCH_SIZE) {
     const batch = symbols.slice(i, i + CFG.BATCH_SIZE);
-    const tasks = batch.map(({ fullSymbol }) => limit(() => evaluateSymbol(fullSymbol)));
+    const tasks = batch.map(({ fullSymbol, fundingRate }) => limit(() => evaluateSymbol(fullSymbol, fundingRate)));
     const batchResults = await Promise.all(tasks);
 
     for (const r of batchResults) {

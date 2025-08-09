@@ -13,7 +13,8 @@ A production‑oriented Node.js scanner that hunts for **coins about to pump** o
 - **Confluence (non-gating, score-based):**
   Turnover spike, OBV impulse, Squeeze→Breakout, 1m whale sweeps, funding rate bias
 
-- **Output:** one consolidated email (and optional webhook) with **winners** (must-pass) plus a table of **near‑misses** with high **score** (>= `SCORE_ALERT_MIN`). High‑scoring symbols (`score ≥ ALT_SCORE_PASS_MIN`, default 4.0) are also treated as winners.
+- **Output:** one consolidated email with **winners** (must-pass) plus a table of **near‑misses** with high **score** (>= `SCORE_ALERT_MIN`). High‑scoring symbols (`score ≥ ALT_SCORE_PASS_MIN`, default 4.0) are also treated as winners.
+
 
 ---
 
@@ -149,8 +150,9 @@ All klines returned by `/kline/query` are parsed as:
 
 **Why it matters:** Coiling ranges precede expansions; volume + close near high support break direction.
 
-#### F. Funding Rate Bias — `signalFundingRateBias(symbol)`
-- Fetch latest funding rate via `/funding-rate?symbol=...`.
+#### F. Funding Rate Bias — `signalFundingRateBias(rate)`
+- Uses `fundingFeeRate` from the active contract snapshot (no extra request).
+
 - Pass if absolute funding rate ≥ `FUNDING_RATE_THRESHOLD`.
 
 **Why it matters:** Elevated funding often precedes aggressive long pressure and can hint at imminent markup.
@@ -388,7 +390,7 @@ The Ultra script supersedes the legacy Master entry point but both are retained 
 - `buildEmail(...)` — Renders Winners and Near‑Misses as 2 HTML tables
 
 ### API & orchestration
-- `fetchSymbols()` — Active futures with `symbol` & `baseCurrency`
+- `fetchSymbols()` — Active futures with `symbol`, `baseCurrency`, and current `fundingFeeRate`
 - `fetchKlines(symbol, granularity, fromMs, toMs, label)` — Generic kline pull
 - `fetch15mCandles(symbol)` — Aligned 15m klines (logging & sanity)
 - `fetch1mCandles(symbol)` — Last `M1_LOOKBACK_MIN` 1m klines in window
@@ -397,7 +399,7 @@ The Ultra script supersedes the legacy Master entry point but both are retained 
 - `fetchHistoricalDailyVolumes(symbol)` — ~800 days in chunked requests
 - `fetchCurrentAlignedDayVolume(symbol)` — Today’s aligned 1D volume
 - `runSmartScan()` — Batching, evaluation, email, summary
-- `evaluateSymbol(symbol)` — Applies gates, computes signals, score, details
+- `evaluateSymbol(symbol, fundingRate)` — Applies gates, computes signals, score, details
 - `retryOnRateLimit(fn, label)` — One‑retry with **31s** global pause on 429
 - `pauseAll(ms, reason)` — Blocks subsequent requests pipeline‑wide
 
@@ -410,7 +412,7 @@ The Ultra script supersedes the legacy Master entry point but both are retained 
 - `signalTurnoverSpike(klines15m)` — Turnover Z + T/V expansion
 - `signalOBVImpulse(klines15m)` — OBV Z‑score thrust
 - `signalSqueezeBreakout(klines15m)` — BB‑in‑KC squeeze → breakout
-- `signalFundingRateBias(symbol)` — Elevated funding rate
+- `signalFundingRateBias(rate)` — Elevated funding rate
 - `signalOneMinuteWhaleSweeps(symbol)` — Extreme 1m bursts near highs
 
 ### Math & utils
