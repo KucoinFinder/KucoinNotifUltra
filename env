@@ -1,0 +1,65 @@
+# --- KuCoin Pre-Pump Scanner (.env) ---
+
+# Core (gating)
+ENABLE_DAILY_PUMP_FILTER=true
+DAILY_PUMP_SKIP_RATIO=0.20
+ENABLE_VOLUME_SPIKE=true
+VOLUME_SPIKE_RATIO=1.10
+PRICE_JUMP_RATIO=0.10
+GRANULARITY_MIN=15
+
+# New confluence toggles (non-gating unless you change SCORE_ALERT_MIN very low)
+ENABLE_TURNOVER_SPIKE=true
+TURNOVER_Z_MIN=1.80
+TURNOVER_V_RATIO_MIN=1.25
+
+ENABLE_OBV_IMPULSE=true
+OBV_Z_MIN=1.60
+
+ENABLE_SQUEEZE_BREAKOUT=true
+SQZ_BB_PERIOD=20
+SQZ_KC_PERIOD=20
+SQZ_KC_MULT=1.5
+SQZ_VOL_Z_MIN=1.00
+SQZ_CLOSE_NEAR_HIGH_PCT=0.30
+
+ENABLE_1M_WHALE_SWEEPS=true
+M1_LOOKBACK_MIN=60
+M1_VOL_Z_MIN=2.00
+M1_CLOSE_NEAR_HIGH_PCT=0.25
+M1_MIN_SWEEPS=1
+
+# Scoring weights + threshold for near-miss surfacing
+W_VOL_SPIKE=2.0
+W_15M_JUMP=1.5
+W_TURNOVER=1.2
+W_OBV=1.0
+W_SQUEEZE=1.0
+W_M1_WHALE=1.3
+SCORE_ALERT_MIN=2.6
+
+# Batch / concurrency / network
+BATCH_SIZE=22
+CONCURRENCY=2
+SLEEP_BETWEEN_BATCHES_MS=10000
+REQUEST_TIMEOUT_MS=20000
+
+# Email
+EMAIL_ENABLED=true
+EMAIL_FROM=puriyasadat@gmail.com
+EMAIL_PASS=ozrq fpiy zsgw fybw
+EMAIL_TO=NotifKucoin@gmail.com
+EMAIL_DRY_RUN=false
+
+# Debug power
+LOG_LEVEL=trace          # silent|warn|info|debug|trace
+TRACE_HTTP=true
+LOG_PER_CANDLE=true
+DUMP_JSON=true
+DUMP_LIMIT=3
+SANITY_SAMPLE=false
+
+# Schedule (5pm local)
+SCHEDULE_ENABLED=true
+DAILY_SCAN_CRON=0 17 * * *
+TZ=America/Vancouver
