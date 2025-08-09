@@ -36,7 +36,7 @@ A production‑oriented Node.js scanner that hunts for **coins about to pump** o
 
 **Files**
 ```
-KucoinCoinFinderMaster.js   # Main executable
+KucoinCoinFinderUltra.js   # Main executable
 .env                        # Environment variables (thresholds, email, schedule)
 ```
 
