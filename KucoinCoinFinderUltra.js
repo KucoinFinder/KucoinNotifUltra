@@ -2,10 +2,10 @@
  * Smart KuCoin Futures Pre-Pump Scanner — FINAL
  * ---------------------------------------------
  * - Daily O→C pump guard: skip if > DAILY_PUMP_SKIP_RATIO (default 20%)
- * - Must pass BOTH (gating):
+ * - Gating: pass if EITHER of the following is true (set REQUIRE_BOTH_GATES=true to require both):
  *    (A) 1D volume today ≥ VOLUME_SPIKE_RATIO × prior historical max (5pm→5pm aligned)
  *    (B) At least one 15m candle intrabar jump > PRICE_JUMP_RATIO (default 10%)
- * - Optional confluence (non-gating): Turnover spike, OBV impulse, Squeeze→Breakout, 1m Whale Sweeps
+ * - Optional confluence (non-gating): Turnover spike, OBV impulse, Squeeze→Breakout, 1m Whale Sweeps, funding rate bias
  * - Simple scoring surfaces near-misses; second email table lists high-confluence near-misses.
  *
  * Requires: npm i axios dayjs nodemailer node-cron p-limit dotenv
@@ -37,6 +37,9 @@ const CFG = {
   // Core detectors
   PRICE_JUMP_RATIO: +process.env.PRICE_JUMP_RATIO || 0.10, // >10% intrabar
   GRANULARITY_MIN: +process.env.GRANULARITY_MIN || 15,
+
+  // Gating strictness
+  REQUIRE_BOTH_GATES: envBool(process.env.REQUIRE_BOTH_GATES, false),
 
   // Daily pump filter
   ENABLE_DAILY_PUMP_FILTER: envBool(process.env.ENABLE_DAILY_PUMP_FILTER, true),
@@ -81,6 +84,10 @@ const CFG = {
   M1_CLOSE_NEAR_HIGH_PCT: +process.env.M1_CLOSE_NEAR_HIGH_PCT || 0.25,
   M1_MIN_SWEEPS: +process.env.M1_MIN_SWEEPS || 1,
 
+  // Funding rate bias
+  ENABLE_FUNDING_RATE_BIAS: envBool(process.env.ENABLE_FUNDING_RATE_BIAS, true),
+  FUNDING_RATE_THRESHOLD: +process.env.FUNDING_RATE_THRESHOLD || 0.0005,
+
   // scoring
   W_VOL_SPIKE: +process.env.W_VOL_SPIKE || 2.0,
   W_15M_JUMP: +process.env.W_15M_JUMP || 1.5,
@@ -88,7 +95,9 @@ const CFG = {
   W_OBV: +process.env.W_OBV || 1.0,
   W_SQUEEZE: +process.env.W_SQUEEZE || 1.0,
   W_M1_WHALE: +process.env.W_M1_WHALE || 1.3,
+  W_FUNDING_RATE: +process.env.W_FUNDING_RATE || 0.8,
   SCORE_ALERT_MIN: +process.env.SCORE_ALERT_MIN || 2.6,
+  ALT_SCORE_PASS_MIN: +process.env.ALT_SCORE_PASS_MIN || 4.0,
 
   // Batch / concurrency
   BATCH_SIZE: +process.env.BATCH_SIZE || 22,
@@ -266,7 +275,11 @@ async function fetchSymbols() {
   const fetchFn = async () => {
     const res = await api.get('/contracts/active', { _label: 'GET /contracts/active' });
     const list = res.data.data
-      .map(c => ({ fullSymbol: c.symbol, baseSymbol: `K${c.baseCurrency}` }))
+      .map(c => ({
+        fullSymbol: c.symbol,
+        baseSymbol: `K${c.baseCurrency}`,
+        fundingRate: Number(c.fundingFeeRate)
+      }))
       .sort((a, b) => a.fullSymbol.localeCompare(b.fullSymbol));
     return list;
   };
@@ -302,6 +315,13 @@ async function fetch1mCandles(symbol) {
   const winStr = `${startLocal.format('YYYY-MM-DD HH:mm z')} → ${endLocal.format('YYYY-MM-DD HH:mm z')}`;
   if (!arr || arr.length === 0) log.debug(`⚠️ ${symbol}: empty 1m for ${winStr}`);
   return Array.isArray(arr) ? arr.slice(-CFG.M1_LOOKBACK_MIN) : [];
+}
+
+function signalFundingRateBias(rate) {
+  if (!CFG.ENABLE_FUNDING_RATE_BIAS) return null;
+  if (!isFinite(rate)) return null;
+  const pass = Math.abs(rate) >= CFG.FUNDING_RATE_THRESHOLD;
+  return { pass, rate };
 }
 
 async function fetchDailyCandle(symbol) {
@@ -583,7 +603,7 @@ async function signalOneMinuteWhaleSweeps(symbol) {
 ////////////////////////////////////////////////////////////////////////////////
 // Per-symbol evaluation
 ////////////////////////////////////////////////////////////////////////////////
-async function evaluateSymbol(symbol) {
+async function evaluateSymbol(symbol, fundingRate) {
   // 1) Daily pump gate
   const daily = await fetchDailyCandle(symbol);
   if (!passesDailyPumpFilter(daily)) return null;
@@ -611,10 +631,7 @@ async function evaluateSymbol(symbol) {
   const obvSig = signalOBVImpulse(klines);
   const sqzSig = signalSqueezeBreakout(klines);
   const m1Sig = await signalOneMinuteWhaleSweeps(symbol);
-
-  // keep strict gating:
-  const mustPass = Boolean(volSig?.pass) && (jumps && jumps.length > 0);
-
+  const frSig = signalFundingRateBias(fundingRate);
   // scoring for near-miss surfacing
   let score = 0;
   if (volSig?.pass) score += CFG.W_VOL_SPIKE;
@@ -623,6 +640,12 @@ async function evaluateSymbol(symbol) {
   if (obvSig?.pass) score += CFG.W_OBV;
   if (sqzSig?.pass) score += CFG.W_SQUEEZE;
   if (m1Sig?.pass) score += CFG.W_M1_WHALE;
+  if (frSig?.pass) score += CFG.W_FUNDING_RATE;
+
+  const gatePass = CFG.REQUIRE_BOTH_GATES
+    ? (Boolean(volSig?.pass) && (jumps && jumps.length > 0))
+    : (Boolean(volSig?.pass) || (jumps && jumps.length > 0));
+  const mustPass = gatePass || (score >= CFG.ALT_SCORE_PASS_MIN);
 
   return {
     symbol,
@@ -637,6 +660,7 @@ async function evaluateSymbol(symbol) {
       obvImpulse: obvSig,
       squeezeBreakout: sqzSig,
       m1WhaleSweeps: m1Sig,
+      fundingRate: frSig,
       sample15mCount: klines.length,
     }
   };
@@ -646,7 +670,10 @@ async function evaluateSymbol(symbol) {
 // Email render
 ////////////////////////////////////////////////////////////////////////////////
 function buildEmail(windowStr, winners, confluence) {
-  const subject = `🔥 KuCoin Futures — BOTH signals hit (Vol ≥ ${CFG.VOLUME_SPIKE_RATIO.toFixed(2)}× & 15m > ${(CFG.PRICE_JUMP_RATIO*100).toFixed(0)}%) — ${winners.length} — ${windowStr}`;
+  const gateLabel = CFG.REQUIRE_BOTH_GATES
+    ? `BOTH signals hit (Vol ≥ ${CFG.VOLUME_SPIKE_RATIO.toFixed(2)}× & 15m > ${(CFG.PRICE_JUMP_RATIO*100).toFixed(0)}%)`
+    : `Signal match (Vol ≥ ${CFG.VOLUME_SPIKE_RATIO.toFixed(2)}× or 15m > ${(CFG.PRICE_JUMP_RATIO*100).toFixed(0)}%)`;
+  const subject = `🔥 KuCoin Futures — ${gateLabel} — ${winners.length} — ${windowStr}`;
 
   const linesFor = (w) => {
     const vs = w.details.volumeSpike;
@@ -657,13 +684,14 @@ function buildEmail(windowStr, winners, confluence) {
     const obv= w.details.obvImpulse;
     const sqz= w.details.squeezeBreakout;
     const m1 = w.details.m1WhaleSweeps;
+    const fr = w.details.fundingRate;
     const lastJump = j.length ? `${(j[j.length-1].ratio*100).toFixed(2)}%` : '—';
     return [
       `• ${w.symbol} (score=${(w.score||0).toFixed(2)})`,
       `   - Volume spike: ${vs ? `${(vs.ratio*100).toFixed(1)}% of prevMax (today=${fmtNum(vs.todayVol)}, prevMax=${fmtNum(vs.prevMax)}, hist=${vs.histLen})` : '—'}`,
       `   - 15m jumps: ${j.length} (last ${lastJump})`,
       `   - CE: ${ce ? (ce.pass ? 'PASS' : '—') : '—'} | VWAP: ${vd ? (vd.pass ? 'PASS' : '—') : '—'}`,
-      `   - Turnover: ${to?.pass ? `PASS (z=${(to.toZ||0).toFixed(2)})` : '—'} | OBV: ${obv?.pass ? `PASS (z=${(obv.obvZ||0).toFixed(2)})` : '—'} | Squeeze: ${sqz?.pass ? 'PASS' : '—'} | 1m: ${m1?.pass ? `PASS (count=${m1.count})` : '—'}`,
+      `   - Turnover: ${to?.pass ? `PASS (z=${(to.toZ||0).toFixed(2)})` : '—'} | OBV: ${obv?.pass ? `PASS (z=${(obv.obvZ||0).toFixed(2)})` : '—'} | Squeeze: ${sqz?.pass ? 'PASS' : '—'} | 1m: ${m1?.pass ? `PASS (count=${m1.count})` : '—'} | Funding: ${fr ? `${(fr.rate*100).toFixed(3)}%${fr.pass? ' PASS':''}` : '—'}`,
     ].join('\n');
   };
 
@@ -689,6 +717,7 @@ function buildEmail(windowStr, winners, confluence) {
     const obv= w.details.obvImpulse;
     const sqz= w.details.squeezeBreakout;
     const m1 = w.details.m1WhaleSweeps;
+    const fr = w.details.fundingRate;
     const last = j.length ? (j[j.length-1].ratio*100).toFixed(2) + '%' : '—';
     return `<tr>
       <td>${w.symbol}</td>
@@ -702,11 +731,12 @@ function buildEmail(windowStr, winners, confluence) {
       <td>${obv ? (obv.pass ? `PASS (z=${(obv.obvZ||0).toFixed(2)})` : '—') : '—'}</td>
       <td>${sqz ? (sqz.pass ? 'PASS' : '—') : '—'}</td>
       <td>${m1 ? (m1.pass ? `PASS (n=${m1.count})` : '—') : '—'}</td>
+      <td>${fr ? `${(fr.rate*100).toFixed(3)}%` : '—'}</td>
     </tr>`;
   }).join('');
 
   const winnersTable = `
-    <h2>🔥 BOTH signals hit (Vol Spike ≥ ${CFG.VOLUME_SPIKE_RATIO.toFixed(2)}× &amp; 15m intrabar jump &gt; ${(CFG.PRICE_JUMP_RATIO*100).toFixed(0)}%)</h2>
+    <h2>🔥 ${gateLabel}</h2>
     <p><strong>Window:</strong> ${windowStr}</p>
     <table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse; font-family: Arial, sans-serif; font-size: 13px;">
       <thead>
@@ -722,10 +752,11 @@ function buildEmail(windowStr, winners, confluence) {
           <th>OBV</th>
           <th>Squeeze</th>
           <th>1m Whale</th>
+          <th>Funding</th>
         </tr>
       </thead>
       <tbody>
-        ${winners.length ? tableRows(winners) : `<tr><td colspan="11" style="text-align:center;">No matches</td></tr>`}
+        ${winners.length ? tableRows(winners) : `<tr><td colspan="12" style="text-align:center;">No matches</td></tr>`}
       </tbody>
     </table>
   `;
@@ -746,6 +777,7 @@ function buildEmail(windowStr, winners, confluence) {
           <th>OBV</th>
           <th>Squeeze</th>
           <th>1m Whale</th>
+          <th>Funding</th>
         </tr>
       </thead>
       <tbody>
@@ -772,7 +804,10 @@ async function runSmartScan() {
   let symbols = await fetchSymbols();
   if (CFG.SANITY_SAMPLE) symbols = symbols.slice(0, 50);
 
-  log.info(`🔍 Evaluating ${symbols.length} symbols for BOTH conditions (Vol ≥ ${CFG.VOLUME_SPIKE_RATIO.toFixed(2)}× & 15m > ${(CFG.PRICE_JUMP_RATIO*100).toFixed(0)}%)...\n`);
+  const evalDesc = CFG.REQUIRE_BOTH_GATES
+    ? `BOTH conditions (Vol ≥ ${CFG.VOLUME_SPIKE_RATIO.toFixed(2)}× & 15m > ${(CFG.PRICE_JUMP_RATIO*100).toFixed(0)}%)`
+    : `ANY condition (Vol ≥ ${CFG.VOLUME_SPIKE_RATIO.toFixed(2)}× or 15m > ${(CFG.PRICE_JUMP_RATIO*100).toFixed(0)}%)`;
+  log.info(`🔍 Evaluating ${symbols.length} symbols for ${evalDesc}...\n`);
 
   const results = [];
   const winners = [];
@@ -780,7 +815,7 @@ async function runSmartScan() {
 
   for (let i = 0; i < symbols.length; i += CFG.BATCH_SIZE) {
     const batch = symbols.slice(i, i + CFG.BATCH_SIZE);
-    const tasks = batch.map(({ fullSymbol }) => limit(() => evaluateSymbol(fullSymbol)));
+    const tasks = batch.map(({ fullSymbol, fundingRate }) => limit(() => evaluateSymbol(fullSymbol, fundingRate)));
     const batchResults = await Promise.all(tasks);
 
     for (const r of batchResults) {
@@ -845,7 +880,7 @@ async function runSmartScan() {
     const { subject, bodyText, bodyHtml } = buildEmail(windowStr, winners, confluence);
     await sendEmail(subject, bodyText, bodyHtml);
   } else {
-    log.info('No symbols satisfied BOTH conditions or confluence threshold; no email sent.');
+    log.info(`No symbols satisfied ${CFG.REQUIRE_BOTH_GATES ? 'BOTH conditions' : 'gating'} or confluence threshold; no email sent.`);
   }
 
   metrics.finishedAt = new Date();
